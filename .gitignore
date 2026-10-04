@@ -1,6 +1,28 @@
+# Build output (see the const block at the top of magefile.go)
+/bin/
+/release/
+/.coverage/
+/.cover.out
+/.junit/
+
+# Build tools and the Node.js toolchain installed by mage
+/.bin/
+/.node/
+/.node.tmp/
+
+# Symlinks to the current platform's binaries made by `go run mage.go binary`.
+# There is one per directory under cmd/ - add an entry for each new binary.
 /ssm-proxycommand
-/dist/
-*.test
-*.out
-*.log
+
+# Profiling output from --cpu-profile, --mem-profile and SIGUSR1/SIGUSR2
+*.pprof
+*.pprof.*
+*.goroutines.txt.*
+
+# Optional web interface
+/web/node_modules/
+/web/dist/
+
+# Secrets and stray test binaries
 .env
+*.test

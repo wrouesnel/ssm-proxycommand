@@ -1,10 +1,10 @@
 package hostspec
 
 import (
-	"os"
-	"path/filepath"
 	"slices"
 	"testing"
+
+	"github.com/spf13/afero"
 )
 
 func TestParse(t *testing.T) {
@@ -53,10 +53,9 @@ func TestParse(t *testing.T) {
 }
 
 func TestKnownProfiles(t *testing.T) {
-	dir := t.TempDir()
-	cfg := filepath.Join(dir, "config")
-	creds := filepath.Join(dir, "credentials")
-	os.WriteFile(cfg, []byte(`
+	fs := afero.NewMemMapFs()
+	cfg, creds := "/aws/config", "/aws/credentials"
+	if err := afero.WriteFile(fs, cfg, []byte(`
 [default]
 region = us-east-1
 [profile prod]
@@ -65,16 +64,32 @@ region = ap-southeast-2
 [sso-session corp]
 sso_start_url = https://example.awsapps.com/start
 [services local]
-`), 0o600)
-	os.WriteFile(creds, []byte("[legacy]\naws_access_key_id = x\n"), 0o600)
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := afero.WriteFile(fs, creds, []byte("[legacy]\naws_access_key_id = x\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	t.Setenv("AWS_CONFIG_FILE", cfg)
 	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", creds)
 
-	got, err := KnownProfiles()
+	got, err := KnownProfiles(fs)
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := []string{"Dev", "default", "legacy", "prod"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("KnownProfiles = %v, want %v", got, want)
+	}
+
+	// Missing files are not an error.
+	t.Setenv("AWS_CONFIG_FILE", "/nope/config")
+	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", "/nope/credentials")
+	got, err = KnownProfiles(fs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want = []string{"default"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("KnownProfiles = %v, want %v", got, want)
 	}

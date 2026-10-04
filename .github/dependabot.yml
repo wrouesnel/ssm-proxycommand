@@ -1,0 +1,18 @@
+---
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      # Check for updates to GitHub Actions every weekday
+      interval: "daily"
+  - package-ecosystem: "gomod"
+    directory: "/"
+    schedule:
+      # Check for updates to Go modules every week
+      interval: "weekly"
+  # Uncomment if the project has a web interface under web/.
+  # - package-ecosystem: "npm"
+  #   directory: "/web"
+  #   schedule:
+  #     interval: "weekly"

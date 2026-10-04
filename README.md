@@ -23,6 +23,12 @@ including:
 
 ## Install
 
+Download an archive for your platform from the
+[releases page](https://github.com/wrouesnel/ssm-proxycommand/releases) (Linux, macOS, Windows
+and FreeBSD; `SHA256SUMS` lists the checksums), and put `ssm-proxycommand` on your `PATH`.
+
+Or build it with Go:
+
 ```sh
 go install github.com/wrouesnel/ssm-proxycommand/cmd/ssm-proxycommand@latest
 ```
@@ -102,20 +108,25 @@ i-0a1b2c3d4e5f60718	profile=prod region=ap-southeast-2 style=slug
 
 ## Options
 
-Every option can also be set through an environment variable.
+Every flag can also be set with an environment variable: upper-case it, replace `-` with `_` and
+add the prefix `SSM_PROXYCOMMAND_`. For example, `--tag-key` becomes `SSM_PROXYCOMMAND_TAG_KEY`.
 
-| Flag | Environment | Default | |
-|------|-------------|---------|-|
-| `--suffix` | `SSM_PROXYCOMMAND_SUFFIX` | | Suffixes to strip, comma separated. |
-| `--profile` | `SSM_PROXYCOMMAND_PROFILE` | | Use one profile for every host. |
-| `--region` | `SSM_PROXYCOMMAND_REGION` | | Override the region. |
-| `--styles` | `SSM_PROXYCOMMAND_STYLES` | all, in table order | Selection styles to try. |
-| `--tag-key` | `SSM_PROXYCOMMAND_TAG_KEYS` | `Name` | Tags used by `tag` and `slug`. |
-| `--document` | `SSM_PROXYCOMMAND_DOCUMENT` | `AWS-StartSSHSession` | Port-forwarding SSM document to start. |
-| `--reason` | | | Session reason, recorded in CloudTrail. |
-| `--plugin` | `SSM_PROXYCOMMAND_USE_PLUGIN` | off | Hand the session to `session-manager-plugin` instead of the built-in client. |
-| `-v`, `-vv` | | | Log to stderr, or to `--log-file`. |
-| `--log-file` | `SSM_PROXYCOMMAND_LOG_FILE` | | Log here instead of stderr. Logs at info level, or debug with `-vv`. |
+| Flag | Default | |
+|------|---------|-|
+| `--suffix` | | Suffixes to strip, comma separated. |
+| `--profile` | | Use one profile for every host. |
+| `--region` | | Override the region. |
+| `--styles` | all, in table order | Selection styles to try. |
+| `--tag-key` | `Name` | Tags used by `tag` and `slug`. |
+| `--document` | `AWS-StartSSHSession` | Port-forwarding SSM document to start. |
+| `--reason` | | Session reason, recorded in CloudTrail. |
+| `--plugin` | off | Hand the session to `session-manager-plugin` instead of the built-in client. |
+| `--log-level` | `warn` | Log level (`debug`, `info`, `warn`, `error`). |
+| `--log-output-paths` | `stderr` | Where logs go. ssh shows stderr in your terminal, so use a file for `debug`. |
+| `--log-format` | `console` | `console` or `json`. |
+
+There's no configuration file, because ssh runs the ProxyCommand from whatever directory you're in.
+Use flags in the `ProxyCommand` line, or the environment variables.
 
 ## Credentials and permissions
 
@@ -149,9 +160,26 @@ SSH key still has to be authorised on the instance. This tool only replaces the 
 
 ## Development
 
+The project follows [golang-template](https://github.com/wrouesnel/golang-template) and builds
+with [mage](https://magefile.org). Run every command from the repository root:
+
 ```sh
-go test -race ./...
+go run mage.go binary      # build into bin/ and symlink ./ssm-proxycommand
+go run mage.go test        # run the tests
+go run mage.go lint        # golangci-lint
+go run mage.go style       # check formatting (go run mage.go fmt fixes it)
+go run mage.go releaseAll  # cross-compile release archives into release/
 ```
+
+| Path | Purpose |
+|---|---|
+| `cmd/ssm-proxycommand/` | Minimal `main`. It only calls the entrypoint. |
+| `pkg/entrypoints/ssm_proxycommand/` | Command line, logging and the `proxy`, `resolve` and `list` commands. |
+| `pkg/hostspec/` | Parses hostnames into a selector, profile and region. |
+| `pkg/selector/` | Resolves a selector to an EC2 instance. |
+| `pkg/ssmsession/` | The Session Manager data channel client. |
+| `pkg/ssmproto/` | The data channel wire format, handshake payloads and encryption. |
+| `internal/fakeaws/` | Test doubles: a fault-injecting SSM agent, fake EC2/SSM APIs and an SSH server. |
 
 The tests include:
 
@@ -161,3 +189,8 @@ The tests include:
 - an SSH handshake over a lossy session;
 - end-to-end tests that run the system `ssh` client with this binary as its `ProxyCommand`, against
   fake EC2 and SSM endpoints (`AWS_ENDPOINT_URL`).
+
+## Releases
+
+Pushing a `v*` tag runs `.github/workflows/release.yml`. It runs the full CI, cross-compiles
+archives for every platform, and publishes them with `SHA256SUMS` as a GitHub release.

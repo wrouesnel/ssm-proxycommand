@@ -6,9 +6,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"io"
-	"log/slog"
 	"net"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -53,13 +51,6 @@ func startAgent(t *testing.T, a *fakeaws.Agent) {
 	})
 }
 
-func testLogger(t *testing.T) *slog.Logger {
-	if os.Getenv("SSM_TEST_DEBUG") != "" {
-		return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	}
-	return nil
-}
-
 func testOptions(t *testing.T, a *fakeaws.Agent) ssmsession.Options {
 	return ssmsession.Options{
 		SessionID:  "sess-1",
@@ -67,7 +58,6 @@ func testOptions(t *testing.T, a *fakeaws.Agent) ssmsession.Options {
 		TokenValue: fakeaws.InitialToken,
 		TargetID:   "i-0123456789abcdef0",
 		Resume:     a.Resume,
-		Logger:     testLogger(t),
 	}
 }
 

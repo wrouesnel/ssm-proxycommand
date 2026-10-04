@@ -13,7 +13,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"math"
 	"net/http"
 	"net/url"
@@ -26,6 +25,8 @@ import (
 	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
+	logutil "github.com/wrouesnel/go.logutil"
+	"go.uber.org/zap"
 
 	"github.com/wrouesnel/ssm-proxycommand/pkg/ssmproto"
 )
@@ -88,8 +89,6 @@ type Options struct {
 	// Resume enables transparent reconnection when the websocket drops.
 	Resume ResumeFunc
 
-	// Logger receives diagnostics. Nil discards them.
-	Logger *slog.Logger
 	// Stderr receives agent-provided messages meant for the user. Nil discards them.
 	Stderr io.Writer
 	// Dialer overrides the websocket dialer.
@@ -114,7 +113,7 @@ type outMsg struct {
 
 type session struct {
 	opts     Options
-	log      *slog.Logger
+	log      *zap.Logger
 	stderr   io.Writer
 	dialer   *websocket.Dialer
 	clientID string
@@ -161,7 +160,7 @@ func Run(ctx context.Context, opts Options, in io.Reader, out io.Writer) error {
 func newSession(opts Options) *session {
 	s := &session{
 		opts:          opts,
-		log:           opts.Logger,
+		log:           zap.NewNop(),
 		stderr:        opts.Stderr,
 		dialer:        opts.Dialer,
 		clientID:      uuid.NewString(),
@@ -175,9 +174,6 @@ func newSession(opts Options) *session {
 		outputDone:    make(chan struct{}),
 	}
 	s.cond = sync.NewCond(&s.mu)
-	if s.log == nil {
-		s.log = slog.New(slog.DiscardHandler)
-	}
 	if s.stderr == nil {
 		s.stderr = io.Discard
 	}
@@ -194,6 +190,7 @@ func newSession(opts Options) *session {
 
 func (s *session) run(parent context.Context, in io.Reader, out io.Writer) error {
 	s.ctx, s.cancel = context.WithCancelCause(parent)
+	s.log = logutil.FromCtx(parent).With(zap.String("session", s.opts.SessionID))
 	defer s.cancel(errShutdown)
 	// Wake any sender blocked on flow control once the session ends.
 	stop := context.AfterFunc(s.ctx, func() {
@@ -258,7 +255,7 @@ func (s *session) result() error {
 }
 
 func (s *session) fail(err error) {
-	s.log.Debug("session failed", "error", err)
+	s.log.Debug("session failed", zap.Error(err))
 	s.cancel(err)
 	s.closeConn()
 }
@@ -365,7 +362,7 @@ func (s *session) dialWithRetry(streamURL, token string) (*websocket.Conn, error
 			return c, nil
 		}
 		lastErr = err
-		s.log.Debug("data channel dial failed", "attempt", attempt+1, "error", err)
+		s.log.Debug("data channel dial failed", zap.Int("attempt", attempt+1), zap.Error(err))
 		if !s.sleep(delay) {
 			return nil, s.result()
 		}
@@ -398,7 +395,7 @@ func (s *session) reconnect() (*websocket.Conn, error) {
 				return c, nil
 			}
 		}
-		s.log.Warn("resuming session failed", "error", err)
+		s.log.Warn("resuming session failed", zap.Error(err))
 		if time.Now().After(deadline) {
 			return nil, fmt.Errorf("resuming session: %w", err)
 		}
@@ -431,7 +428,7 @@ func (s *session) writeRaw(raw []byte) error {
 	if err := c.WriteMessage(websocket.BinaryMessage, raw); err != nil {
 		// Closing the connection makes the reader notice and start a resume. Unacknowledged
 		// messages are retransmitted on the new connection.
-		s.log.Debug("data channel write failed", "error", err)
+		s.log.Debug("data channel write failed", zap.Error(err))
 		_ = c.Close()
 		return err
 	}
@@ -645,7 +642,7 @@ func (s *session) readLoop() {
 			if s.ctx.Err() != nil {
 				return
 			}
-			s.log.Warn("data channel connection lost, resuming session", "error", err)
+			s.log.Warn("data channel connection lost, resuming session", zap.Error(err))
 			nc, rerr := s.reconnect()
 			if rerr != nil {
 				s.fail(rerr)
@@ -674,7 +671,7 @@ func (s *session) readLoop() {
 func (s *session) handleFrame(data []byte) (bool, error) {
 	m, err := ssmproto.UnmarshalMessage(data)
 	if err != nil {
-		s.log.Debug("discarding invalid frame", "error", err)
+		s.log.Debug("discarding invalid frame", zap.Error(err))
 		return false, nil
 	}
 	switch m.MessageType {
@@ -683,14 +680,14 @@ func (s *session) handleFrame(data []byte) (bool, error) {
 	case ssmproto.MsgAcknowledge:
 		var ack ssmproto.AcknowledgeContent
 		if err := json.Unmarshal(m.Payload, &ack); err != nil {
-			s.log.Debug("discarding invalid acknowledge", "error", err)
+			s.log.Debug("discarding invalid acknowledge", zap.Error(err))
 			return false, nil
 		}
 		s.handleAck(ack.SequenceNumber)
 	case ssmproto.MsgChannelClosed:
 		var cc ssmproto.ChannelClosed
 		_ = json.Unmarshal(m.Payload, &cc)
-		s.log.Debug("channel closed by agent", "output", cc.Output)
+		s.log.Debug("channel closed by agent", zap.String("output", cc.Output))
 		if cc.Output != "" {
 			fmt.Fprintln(s.stderr, cc.Output)
 		}
@@ -700,7 +697,7 @@ func (s *session) handleFrame(data []byte) (bool, error) {
 	case ssmproto.MsgPausePublication:
 		s.setPaused(true)
 	default:
-		s.log.Debug("ignoring message", "type", m.MessageType)
+		s.log.Debug("ignoring message", zap.String("type", m.MessageType))
 	}
 	return false, nil
 }
@@ -778,7 +775,7 @@ func (s *session) process(m *ssmproto.Message) error {
 		case ssmproto.PayloadStdErr:
 			_, _ = s.stderr.Write(payload)
 		default:
-			s.log.Debug("remote exit code", "code", strings.TrimSpace(string(payload)))
+			s.log.Debug("remote exit code", zap.String("code", strings.TrimSpace(string(payload))))
 		}
 		s.sendAck(m)
 		return nil
@@ -790,7 +787,7 @@ func (s *session) process(m *ssmproto.Message) error {
 		return nil
 	default:
 		s.sendAck(m)
-		s.log.Debug("ignoring payload", "type", m.PayloadType)
+		s.log.Debug("ignoring payload", zap.Uint32("type", uint32(m.PayloadType)))
 		return nil
 	}
 }
@@ -810,7 +807,7 @@ func (s *session) handleHandshakeRequest(payload []byte) error {
 	if err := json.Unmarshal(payload, &req); err != nil {
 		return fmt.Errorf("decoding handshake request: %w", err)
 	}
-	s.log.Debug("handshake request", "agentVersion", req.AgentVersion)
+	s.log.Debug("handshake request", zap.String("agentVersion", req.AgentVersion))
 	s.mu.Lock()
 	s.agentVer = req.AgentVersion
 	s.mu.Unlock()
@@ -835,7 +832,7 @@ func (s *session) handleHandshakeRequest(payload []byte) error {
 					s.mu.Lock()
 					s.enc = enc
 					s.mu.Unlock()
-					s.log.Debug("session encryption enabled", "kmsKeyId", kr.KMSKeyID)
+					s.log.Debug("session encryption enabled", zap.String("kmsKeyId", kr.KMSKeyID))
 				}
 			}
 		default:

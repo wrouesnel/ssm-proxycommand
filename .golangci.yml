@@ -1,0 +1,9 @@
+# golangci-lint v2 configuration, used by `go run mage.go lint`.
+# `go run mage.go style` / `fmt` run their own fixed formatter set and ignore this file.
+version: "2"
+
+linters:
+  default: standard
+  exclusions:
+    presets:
+      - std-error-handling

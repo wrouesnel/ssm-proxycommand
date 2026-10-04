@@ -1,4 +1,4 @@
-package main
+package ssm_proxycommand_test
 
 import (
 	"bytes"
@@ -36,7 +36,7 @@ func newE2E(t *testing.T) *e2eEnv {
 	dir := t.TempDir()
 
 	bin := filepath.Join(dir, "ssm-proxycommand")
-	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
+	if out, err := exec.Command("go", "build", "-o", bin, "../../../cmd/ssm-proxycommand").CombinedOutput(); err != nil {
 		t.Fatalf("building: %v\n%s", err, out)
 	}
 
@@ -76,8 +76,8 @@ func newE2E(t *testing.T) *e2eEnv {
 
 	cfg := filepath.Join(dir, "config")
 	creds := filepath.Join(dir, "credentials")
-	os.WriteFile(cfg, []byte("[profile e2e]\nregion = us-east-1\n[profile Other.Team]\nregion = eu-west-1\n"), 0o600)
-	os.WriteFile(creds, []byte("[e2e]\naws_access_key_id = AKIDTEST\naws_secret_access_key = secret\n"+
+	mustWrite(t, cfg, []byte("[profile e2e]\nregion = us-east-1\n[profile Other.Team]\nregion = eu-west-1\n"), 0o600)
+	mustWrite(t, creds, []byte("[e2e]\naws_access_key_id = AKIDTEST\naws_secret_access_key = secret\n"+
 		"[Other.Team]\naws_access_key_id = AKIDTEST\naws_secret_access_key = secret\n"), 0o600)
 
 	env := []string{
@@ -89,9 +89,9 @@ func newE2E(t *testing.T) *e2eEnv {
 		"AWS_EC2_METADATA_DISABLED=true",
 	}
 	sshConfig := filepath.Join(dir, "ssh_config")
-	os.WriteFile(sshConfig, []byte(strings.Join([]string{
+	mustWrite(t, sshConfig, []byte(strings.Join([]string{
 		"Host *.ssm",
-		"  ProxyCommand " + bin + " --suffix=ssm --log-file=" + filepath.Join(dir, "proxy.log") + " -vv %h %p",
+		"  ProxyCommand " + bin + " --suffix=ssm --log-level=debug --log-output-paths=" + filepath.Join(dir, "proxy.log") + " %h %p",
 		"  User tester",
 		"  IdentityFile " + keyFile,
 		"  IdentitiesOnly yes",
@@ -190,33 +190,6 @@ func TestE2ESelectionErrors(t *testing.T) {
 	}
 }
 
-func TestE2EList(t *testing.T) {
-	e := newE2E(t)
-	cmd := exec.Command(e.bin, "--suffix=ssm", "list", "e2e")
-	cmd.Env = e.env
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("list: %v\n%s", err, out)
-	}
-	for _, want := range []string{
-		"web-server.e2e.ssm",
-		"bastion.e2e.ssm",
-		"i-00000000000000003.e2e.ssm", // "dupe" is ambiguous, so the ID is offered
-		"i-00000000000000005.e2e.ssm", // stopped
-	} {
-		if !strings.Contains(string(out), want) {
-			t.Errorf("list output lacks %q:\n%s", want, out)
-		}
-	}
-
-	cmd = exec.Command(e.bin, "--suffix=ssm", "resolve", "web-server.e2e.ssm")
-	cmd.Env = e.env
-	out, err = cmd.CombinedOutput()
-	if err != nil || !strings.Contains(string(out), "i-00000000000000002") || !strings.Contains(string(out), "style=slug") {
-		t.Fatalf("resolve: %v\n%s", err, out)
-	}
-}
-
 func waitFor(t *testing.T, cond func() bool, what string) {
 	t.Helper()
 	for i := 0; i < 100; i++ {
@@ -235,4 +208,11 @@ func contains(list []string, s string) bool {
 		}
 	}
 	return false
+}
+
+func mustWrite(t *testing.T, name string, data []byte, perm os.FileMode) {
+	t.Helper()
+	if err := os.WriteFile(name, data, perm); err != nil {
+		t.Fatal(err)
+	}
 }

@@ -20,6 +20,9 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+
+	"github.com/chigopher/pathlib"
+	"github.com/spf13/afero"
 )
 
 // Spec is a parsed hostname.
@@ -104,19 +107,19 @@ func matchProfile(h string, profiles []string) (profile, rest string, ok bool) {
 	return profile, rest, best >= 0
 }
 
-// KnownProfiles lists the profiles defined in the shared AWS config and credentials files,
+// KnownProfiles lists the profiles defined in the shared AWS config and credentials files on fs,
 // honouring AWS_CONFIG_FILE and AWS_SHARED_CREDENTIALS_FILE. "default" is always included since
 // it can be satisfied by environment credentials alone.
-func KnownProfiles() ([]string, error) {
+func KnownProfiles(fs afero.Fs) ([]string, error) {
 	home, _ := os.UserHomeDir()
 	configFile := envOr("AWS_CONFIG_FILE", filepath.Join(home, ".aws", "config"))
 	credsFile := envOr("AWS_SHARED_CREDENTIALS_FILE", filepath.Join(home, ".aws", "credentials"))
 
 	set := map[string]bool{"default": true}
-	if err := readSections(configFile, true, set); err != nil {
+	if err := readSections(pathlib.NewPath(configFile, pathlib.PathWithAfero(fs)), true, set); err != nil {
 		return nil, err
 	}
-	if err := readSections(credsFile, false, set); err != nil {
+	if err := readSections(pathlib.NewPath(credsFile, pathlib.PathWithAfero(fs)), false, set); err != nil {
 		return nil, err
 	}
 	out := make([]string, 0, len(set))
@@ -136,8 +139,8 @@ func envOr(key, def string) string {
 
 // readSections adds profile names from an INI file. In the config file, profiles other than
 // default are written "[profile name]" and other section kinds (sso-session, services) are skipped.
-func readSections(path string, isConfig bool, set map[string]bool) error {
-	f, err := os.Open(path)
+func readSections(path *pathlib.Path, isConfig bool, set map[string]bool) error {
+	f, err := path.Open()
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}

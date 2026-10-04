@@ -1,0 +1,90 @@
+---
+name: Release
+on:
+  push:
+    tags:
+      - v*
+
+jobs:
+  integration:
+    uses: ./.github/workflows/integration.yml
+
+  generate-release-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      release-matrix: ${{ steps.generate-matrix.outputs.release-matrix }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Generate Release Matrix
+        id: generate-matrix
+        run: go run mage.go githubReleaseMatrix
+
+  release-build:
+    runs-on: ubuntu-latest
+    needs:
+      - integration
+      - generate-release-matrix
+    strategy:
+      matrix:
+        osarch: ${{ fromJson(needs.generate-release-matrix.outputs.release-matrix) }}
+      max-parallel: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Fetch tags
+        run: git fetch --prune --unshallow --tags -f
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      # Only needed if the project has a web interface under web/.
+      - name: Setup Node
+        if: hashFiles('web/package-lock.json') != ''
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Release Build
+        run: go run mage.go release ${{ matrix.osarch }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ strategy.job-index }}
+          path: release/*
+
+  release:
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    needs:
+      - release-build
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: release
+
+      - name: Generate checksums
+        run: cd release && sha256sum -- * > SHA256SUMS
+
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          files: |
+            release/*
