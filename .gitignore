@@ -1,0 +1,6 @@
+/ssm-proxycommand
+/dist/
+*.test
+*.out
+*.log
+.env
