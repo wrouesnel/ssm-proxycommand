@@ -28,11 +28,12 @@ Download an archive for your platform from the
 and FreeBSD; `SHA256SUMS` lists the checksums), and put `ssm-proxycommand` on your `PATH`.
 
 On Linux (amd64 and arm64) you can install a package from the same page instead. Both install
-`/usr/bin/ssm-proxycommand`:
+`/usr/bin/ssm-proxycommand`. GitHub shows `~` in the package filenames as `.`, but the package
+version keeps the `~`:
 
 ```sh
-# Ubuntu 24.04 (use the ~ubuntu26.04 package on 26.04; either works on Debian)
-sudo apt install ./ssm-proxycommand_<version>-1~ubuntu24.04_amd64.deb
+# Ubuntu 24.04 (use the ubuntu26.04 package on 26.04; either works on Debian)
+sudo apt install ./ssm-proxycommand_<version>-1.ubuntu24.04_amd64.deb
 # Fedora, RHEL, Amazon Linux
 sudo dnf install ./ssm-proxycommand-<version>-1.x86_64.rpm
 ```
