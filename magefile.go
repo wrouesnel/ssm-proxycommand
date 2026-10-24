@@ -595,6 +595,7 @@ func Tools() (err error) {
 	if berr := toolBuild("static", []string{"golangci-lint", "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.2"},
 		[]string{"gocovmerge", "github.com/wadey/gocovmerge@latest"},
 		[]string{"oapi-codegen", "github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@latest"},
+		[]string{"nfpm", "github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.48.0"},
 	); berr != nil {
 		return berr
 	}
@@ -1089,21 +1090,31 @@ func makeBuilder(cmd string, platform Platform) func() error {
 			return errors.Wrapf(err, "error making directory: cmd: %s", cmd)
 		}
 
+		// The version is linked into the binary, so a binary built at another commit is stale
+		// even when no source file changed.
+		// It's kept outside the platform directory, which is archived for releases.
+		versionStamp := path.Join(binDir, ".version-stamps", fmt.Sprintf("%s_%s", platform.String(), cmd))
 		Log("Checking for changes:", platform.PlatformBin(cmd))
 		if changed, err := target.Path(platform.PlatformBin(cmd), goSrc...); !changed {
 			if err != nil {
 				if !os.IsNotExist(err) {
 					return errors.Wrapf(err, "error while checking for changes: cmd: %s", cmd)
 				}
-			} else {
+			} else if built, _ := os.ReadFile(versionStamp); string(built) == version {
 				return nil
 			}
 		}
 
 		fmt.Println("Building", platform.PlatformBin(cmd))
-		return sh.RunWith(map[string]string{"CGO_ENABLED": "0", "GOOS": platform.OS, "GOARCH": platform.Arch},
+		if err := sh.RunWith(map[string]string{"CGO_ENABLED": "0", "GOOS": platform.OS, "GOARCH": platform.Arch},
 			"go", "build", "-a", "-ldflags", fmt.Sprintf("-buildid='' -extldflags '-static' -X %s=%s", versionSymbol(), version),
-			"-trimpath", "-o", platform.PlatformBin(cmd), cmdSrc)
+			"-trimpath", "-o", platform.PlatformBin(cmd), cmdSrc); err != nil {
+			return err
+		}
+		if err := os.MkdirAll(path.Dir(versionStamp), os.FileMode(OS_ALL_RWX)); err != nil {
+			return err
+		}
+		return os.WriteFile(versionStamp, []byte(version), os.FileMode(0o666))
 	}
 	return f
 }
@@ -1256,6 +1267,114 @@ func ReleaseAll() error {
 	}
 
 	return waitResults(buildResults)()
+}
+
+// pkgName is the command packaged by Deb and Rpm, and the name of the packages.
+// packaging/nfpm.yaml refers to it too.
+const pkgName = "ssm-proxycommand"
+
+// debDistros are the Ubuntu releases .deb packages are built for. The binary is static, so
+// the packages hold the same files and differ only in the version suffix (~ubuntu24.04),
+// which lets one apt repository carry both.
+var debDistros = []string{"24.04", "26.04"}
+
+// pkgArches maps the Go architectures that are packaged to their Debian and RPM names.
+var pkgArches = map[string]struct{ Deb, RPM string }{
+	"amd64": {"amd64", "x86_64"},
+	"arm64": {"arm64", "aarch64"},
+}
+
+// pkgVersion converts the git-derived version to a package upstream version: v1.2.3 becomes
+// 1.2.3, and v1.2.3-4-gabcdef-dirty becomes 1.2.3+4.gabcdef.dirty, which sorts after 1.2.3.
+func pkgVersion() string {
+	v := strings.TrimPrefix(version, "v")
+	if base, rest, ok := strings.Cut(v, "-"); ok {
+		v = base + "+" + strings.ReplaceAll(rest, "-", ".")
+	}
+	return v
+}
+
+// nfpmPackage builds the Linux release binary for goArch and runs nfpm once per release,
+// writing the package named by targetName for each into the release/ directory.
+func nfpmPackage(packager string, goArch string, pkgArch string, releases []string, targetName func(release string) string) error {
+	mg.Deps(Tools)
+
+	if err := os.MkdirAll(releaseDir, os.FileMode(OS_ALL_RWX)); err != nil {
+		return err
+	}
+	osArch := "linux-" + goArch
+	if err := ReleaseBin(osArch); err != nil {
+		return err
+	}
+	platform := platformsLookup[osArch]
+	// nfpm doesn't expand variables in src: stage each architecture's binary at a fixed path.
+	staged := path.Join(binDir, "pkg", pkgName)
+	if err := os.MkdirAll(path.Dir(staged), os.FileMode(OS_ALL_RWX)); err != nil {
+		return err
+	}
+	if err := sh.Copy(staged, platform.PlatformBin(pkgName)); err != nil {
+		return err
+	}
+	for _, release := range releases {
+		target := path.Join(releaseDir, targetName(release))
+		Log("Packaging", target)
+		cmd := exec.Command("nfpm", "package", "--config", path.Join("packaging", "nfpm.yaml"),
+			"--packager", packager, "--target", target)
+		cmd.Dir = curDir
+		cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+		cmd.Env = append(os.Environ(),
+			"PKG_ARCH="+pkgArch,
+			"PKG_VERSION="+pkgVersion(),
+			"PKG_RELEASE="+release,
+		)
+		if err := cmd.Run(); err != nil {
+			return errors.Wrapf(err, "nfpm %s", target)
+		}
+	}
+	return nil
+}
+
+// sortedPkgArches returns the keys of pkgArches in order.
+func sortedPkgArches() []string {
+	goArches := lo.Keys(pkgArches)
+	sort.Strings(goArches)
+	return goArches
+}
+
+// Deb builds .deb packages for every Ubuntu release in debDistros and every architecture in
+// pkgArches, into the release/ directory.
+func Deb() error {
+	for _, goArch := range sortedPkgArches() {
+		arch := pkgArches[goArch].Deb
+		releases := lo.Map(debDistros, func(distro string, _ int) string { return "1~ubuntu" + distro })
+		if err := nfpmPackage("deb", goArch, arch, releases, func(release string) string {
+			return fmt.Sprintf("%s_%s-%s_%s.deb", pkgName, pkgVersion(), release, arch)
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Rpm builds .rpm packages for every architecture in pkgArches, into the release/ directory.
+func Rpm() error {
+	for _, goArch := range sortedPkgArches() {
+		arch := pkgArches[goArch].RPM
+		if err := nfpmPackage("rpm", goArch, arch, []string{"1"}, func(release string) string {
+			return fmt.Sprintf("%s-%s-%s.%s.rpm", pkgName, pkgVersion(), release, arch)
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Packages builds the .deb and .rpm packages into the release/ directory.
+func Packages() error {
+	if err := Deb(); err != nil {
+		return err
+	}
+	return Rpm()
 }
 
 // Clean deletes build output and cleans up the working directory.

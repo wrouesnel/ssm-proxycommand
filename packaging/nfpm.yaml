@@ -1,0 +1,38 @@
+# nfpm configuration for the ssm-proxycommand .deb and .rpm packages, built by
+# `go run mage.go deb` and `go run mage.go rpm`. The magefile sets the ${...} variables for
+# each release and architecture. Paths are relative to the repository root.
+name: ssm-proxycommand
+arch: ${PKG_ARCH}
+platform: linux
+version: ${PKG_VERSION}
+version_schema: none
+release: ${PKG_RELEASE}
+section: net
+priority: optional
+maintainer: Will Rouesnel <wrouesnel@wrouesnel.com>
+description: |-
+  SSH ProxyCommand over AWS SSM Session Manager
+  ssm-proxycommand carries SSH connections over AWS Systems Manager Session Manager,
+  selecting the EC2 instance and AWS profile from the hostname. It implements the Session
+  Manager data channel natively, so neither the AWS CLI nor session-manager-plugin is needed.
+homepage: https://github.com/wrouesnel/ssm-proxycommand
+
+# The binary is static: nothing is required at runtime.
+recommends:
+  - openssh-client
+
+overrides:
+  rpm:
+    recommends:
+      - openssh-clients
+
+contents:
+  # nfpm doesn't expand variables in src: the magefile copies each architecture's binary here.
+  - src: bin/pkg/ssm-proxycommand
+    dst: /usr/bin/ssm-proxycommand
+    file_info:
+      mode: 0755
+  - src: README.md
+    dst: /usr/share/doc/ssm-proxycommand/README.md
+    file_info:
+      mode: 0644

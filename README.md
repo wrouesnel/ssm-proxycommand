@@ -27,6 +27,16 @@ Download an archive for your platform from the
 [releases page](https://github.com/wrouesnel/ssm-proxycommand/releases) (Linux, macOS, Windows
 and FreeBSD; `SHA256SUMS` lists the checksums), and put `ssm-proxycommand` on your `PATH`.
 
+On Linux (amd64 and arm64) you can install a package from the same page instead. Both install
+`/usr/bin/ssm-proxycommand`:
+
+```sh
+# Ubuntu 24.04 (use the ~ubuntu26.04 package on 26.04; either works on Debian)
+sudo apt install ./ssm-proxycommand_<version>-1~ubuntu24.04_amd64.deb
+# Fedora, RHEL, Amazon Linux
+sudo dnf install ./ssm-proxycommand-<version>-1.x86_64.rpm
+```
+
 Or build it with Go:
 
 ```sh
@@ -169,6 +179,7 @@ go run mage.go test        # run the tests
 go run mage.go lint        # golangci-lint
 go run mage.go style       # check formatting (go run mage.go fmt fixes it)
 go run mage.go releaseAll  # cross-compile release archives into release/
+go run mage.go packages    # build .deb and .rpm packages into release/ (or: deb, rpm)
 ```
 
 | Path | Purpose |
@@ -193,4 +204,6 @@ The tests include:
 ## Releases
 
 Pushing a `v*` tag runs `.github/workflows/release.yml`. It runs the full CI, cross-compiles
-archives for every platform, and publishes them with `SHA256SUMS` as a GitHub release.
+archives for every platform, builds the `.deb` and `.rpm` packages, and publishes them all with
+`SHA256SUMS` as a GitHub release. Packages are configured in `packaging/nfpm.yaml` and built by
+[nfpm](https://nfpm.goreleaser.com), which `go run mage.go tools` installs.

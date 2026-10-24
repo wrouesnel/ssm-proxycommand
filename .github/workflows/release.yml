@@ -64,12 +64,39 @@ jobs:
           name: release-${{ strategy.job-index }}
           path: release/*
 
+  release-packages:
+    runs-on: ubuntu-latest
+    needs:
+      - integration
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Fetch tags
+        run: git fetch --prune --unshallow --tags -f
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build .deb and .rpm packages
+        run: go run mage.go packages
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-packages
+          path: |
+            release/*.deb
+            release/*.rpm
+
   release:
     permissions:
       contents: write
     runs-on: ubuntu-latest
     needs:
       - release-build
+      - release-packages
     steps:
       - name: Download artifacts
         uses: actions/download-artifact@v4
